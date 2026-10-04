@@ -1,51 +1,37 @@
-using System;
-using System.Reflection;
-using Avalonia;
-using YoutubeDownloader.Utils;
+using YoutubeExplode;
+using YoutubeExplode.Videos.Streams;
 
-namespace YoutubeDownloader;
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddCors(options => {
+    options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+});
 
-public static class Program
-{
-    private static Assembly Assembly { get; } = Assembly.GetExecutingAssembly();
+var app = builder.Build();
+app.UseCors();
 
-    public static string Name { get; } = Assembly.GetName().Name ?? "YoutubeDownloader";
+var youtube = new YoutubeClient();
 
-    public static Version Version { get; } = Assembly.GetName().Version ?? new Version(0, 0, 0);
+app.MapGet("/", () => "API is online!");
 
-    public static string VersionString { get; } = Version.ToString(3);
+app.MapGet("/api/download", async (string url) => {
+    try {
+        var video = await youtube.Videos.GetAsync(url);
+        var streamManifest = await youtube.Videos.Streams.GetManifestAsync(url);
+        
+        var muxed = streamManifest.GetMuxedStreams().OrderByDescending(s => s.VideoQuality).FirstOrDefault();
+        var audio = streamManifest.GetAudioOnlyStreams().OrderByDescending(s => s.Bitrate).FirstOrDefault();
 
-    public static bool IsDevelopmentBuild { get; } = Version.Major is <= 0 or >= 999;
-
-    public static string ProjectUrl { get; } = "https://github.com/Tyrrrz/YoutubeDownloader";
-
-    public static string ProjectReleasesUrl { get; } = $"{ProjectUrl}/releases";
-
-    public static AppBuilder BuildAvaloniaApp() =>
-        AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace();
-
-    [STAThread]
-    public static int Main(string[] args)
-    {
-        // Build and run the app
-        var builder = BuildAvaloniaApp();
-
-        try
-        {
-            return builder.StartWithClassicDesktopLifetime(args);
-        }
-        catch (Exception ex)
-        {
-            if (OperatingSystem.IsWindows())
-                _ = NativeMethods.Windows.MessageBox(0, ex.ToString(), "Fatal Error", 0x10);
-
-            throw;
-        }
-        finally
-        {
-            // Clean up after application shutdown
-            if (builder.Instance is IDisposable disposableApp)
-                disposableApp.Dispose();
-        }
+        return Results.Ok(new {
+            title = video.Title,
+            thumbnail = video.Thumbnails.LastOrDefault()?.Url,
+            duration = video.Duration?.ToString(),
+            videoUrl = muxed?.Url,
+            audioUrl = audio?.Url
+        });
+    } catch (Exception ex) {
+        return Results.BadRequest(new { error = ex.Message });
     }
-}
+});
+
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+app.Run($"http://0.0.0.0:{port}");
